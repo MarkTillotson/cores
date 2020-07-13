@@ -61,6 +61,10 @@
 #define AUDIO_SAMPLE_RATE AUDIO_SAMPLE_RATE_EXACT
 
 #ifndef __ASSEMBLER__
+
+
+#define NEW_SCHEDULE
+
 class AudioStream;
 class AudioConnection;
 
@@ -100,6 +104,9 @@ protected:
 	unsigned char dest_index;
 	AudioConnection *next_dest;
 	bool isConnected;
+#ifdef NEW_SCHEDULE
+	friend void software_isr(void);
+#endif
 };
 
 
@@ -117,6 +124,10 @@ protected:
 #define AudioMemoryUsageMax() (AudioStream::memory_used_max)
 #define AudioMemoryUsageMaxReset() (AudioStream::memory_used_max = AudioStream::memory_used)
 
+#ifdef NEW_SCHEDULE
+void insert_stream (AudioStream * stream) ;
+#endif
+
 class AudioStream
 {
 public:
@@ -129,6 +140,9 @@ public:
 			}
 			// add to a simple list, for update_all
 			// TODO: replace with a proper data flow analysis in update_all
+#ifdef NEW_SCHEDULE
+			insert_stream (this) ;
+#else
 			if (first_update == NULL) {
 				first_update = this;
 			} else {
@@ -137,6 +151,7 @@ public:
 				p->next_update = this;
 			}
 			next_update = NULL;
+#endif
 			cpu_cycles = 0;
 			cpu_cycles_max = 0;
 			numConnections = 0;
@@ -166,17 +181,23 @@ protected:
 	friend void software_isr(void);
 	friend class AudioConnection;
 	uint8_t numConnections;
+#ifdef NEW_SCHEDULE
+	friend void insert_stream(AudioStream *) ;
+#endif
 private:
 	AudioConnection *destination_list;
 	audio_block_t **inputQueue;
 	static bool update_scheduled;
 	virtual void update(void) = 0;
+#ifndef NEW_SCHEDULE
 	static AudioStream *first_update; // for update_all
 	AudioStream *next_update; // for update_all
+#endif
 	static audio_block_t *memory_pool;
 	static uint32_t memory_pool_available_mask[];
 	static uint16_t memory_pool_first_mask;
 };
+
 
 #endif
 #endif

@@ -307,13 +307,102 @@ void AudioStream::update_stop(void)
 	update_scheduled = false;
 }
 
+#ifdef NEW_SCHEDULE
+int stream_rootp = 0 ;
+int stream_endp = 0 ;
+int max_stream_count = 0 ;
+
+AudioStream ** stream_schedule = NULL ;
+
+void expand_schedule ()
+{
+  int new_max = max_stream_count == 0 ? 5 : 3 * max_stream_count / 2 + 1 ;
+  Serial.printf ("expand_schedule to %i\n", new_max) ;
+  AudioStream ** new_schedule = (AudioStream **) malloc (new_max * sizeof (AudioStream *)) ;
+  for (int i = 0 ; i < stream_endp ; i++)
+    new_schedule [i] = stream_schedule [i] ;
+  stream_schedule = new_schedule ;
+  max_stream_count = new_max ;
+}
+
+void insert_stream (AudioStream * stream)
+{
+  Serial.printf ("ins") ;
+  if (stream_endp == max_stream_count)
+    expand_schedule () ;
+  if (stream->num_inputs == 0)  // no inputs are in the roots area at the front
+  {
+    Serial.print ("insert_stream root") ;
+    stream_schedule [stream_endp++] = stream_schedule [stream_rootp] ;
+    stream_schedule [stream_rootp++] = stream ;
+  }
+  else
+  {
+    Serial.print ("insert_stream") ;
+    stream_schedule [stream_endp++] = stream ;
+  }
+  Serial.printf (" %i %i\n", stream_rootp, stream_endp) ;
+}
+
+#else
+
 AudioStream * AudioStream::first_update = NULL;
+
+#endif // NEW_SCHEDULE
+
 
 void software_isr(void) // AudioStream::update_all()
 {
-	AudioStream *p;
-
 	uint32_t totalcycles = ARM_DWT_CYCCNT;
+#ifdef NEW_SCHEDULE
+	int scanp = 0 ;
+	int endp = stream_rootp ;
+	while (scanp < endp)
+	{
+	  AudioStream * p = stream_schedule[scanp++] ;
+	  if (p->active)
+	  {
+	    // cycle accounting
+	    uint32_t cycles = ARM_DWT_CYCCNT;
+
+	    // process this stream node
+	    p->update() ;
+
+	    // complete cycle accounting
+	    cycles = (ARM_DWT_CYCCNT - cycles) >> 6;
+	    p->cpu_cycles = cycles;
+	    if (cycles > p->cpu_cycles_max) p->cpu_cycles_max = cycles;
+
+	    // Place active destination nodes into the scan set if not already
+	    for (AudioConnection * con = p->destination_list ; con != NULL ; con = con->next_dest)
+	    {
+	      if (con->isConnected)
+	      {
+	      AudioStream * dest = &con->dst ;
+	      if (dest != NULL)
+	      {
+		// if the destination hasn't been scanned yet, ensure its in the scan window,
+		// hopefully this sorts the list the first time and thereafter its already in order.
+		for (int i = endp ; i < stream_endp ; i++)
+		  if (stream_schedule[i] == dest)  // subsequent update_all's should hit this first time.
+		  {
+		    if (i != endp)
+		    { // swap to top
+		      AudioStream * tmp = stream_schedule[endp] ;
+		      stream_schedule[endp] = stream_schedule[i] ;
+		      stream_schedule[i] = tmp ;
+		    }
+		    // add to the scan set.
+		    endp ++ ;
+		    break ;
+		  }
+	      }
+	      }
+	    }
+	  }
+	}
+#else
+	AudioStream *p;
 	//digitalWriteFast(2, HIGH);
 	for (p = AudioStream::first_update; p; p = p->next_update) {
 		if (p->active) {
@@ -327,6 +416,7 @@ void software_isr(void) // AudioStream::update_all()
 		}
 	}
 	//digitalWriteFast(2, LOW);
+#endif
 	totalcycles = (ARM_DWT_CYCCNT - totalcycles) >> 6;
 	AudioStream::cpu_cycles_total = totalcycles;
 	if (totalcycles > AudioStream::cpu_cycles_total_max)
